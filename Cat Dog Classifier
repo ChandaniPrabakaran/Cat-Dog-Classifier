@@ -1,0 +1,172 @@
+import os
+import shutil
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import random
+import plotly.express as px
+import scipy as sp
+
+from scipy import ndimage
+from shutil import copyfile
+from tensorflow.keras.layers import Conv2D,Add,MaxPooling2D, Dense, BatchNormalization,Input
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import LearningRateScheduler
+from tensorflow.keras.preprocessing.image import ImageDataGenerator 
+
+class_names = ['Cat', 'Dog'] 
+
+n_dogs = len(os.listdir('/kaggle/input/microsoft-catsvsdogs-dataset/PetImages/Dog'))
+n_cats = len(os.listdir('/kaggle/input/microsoft-catsvsdogs-dataset/PetImages/Cat'))
+n_images = [n_cats, n_dogs]
+px.pie(names=class_names, values=n_images)
+
+try:
+    os.mkdir('/tmp/cats-v-dogs')
+    os.mkdir('/tmp/cats-v-dogs/training')
+    os.mkdir('/tmp/cats-v-dogs/validation')
+    os.mkdir('/tmp/cats-v-dogs/test')
+    os.mkdir('/tmp/cats-v-dogs/training/cats')
+    os.mkdir('/tmp/cats-v-dogs/training/dogs')
+    os.mkdir('/tmp/cats-v-dogs/validation/cats')
+    os.mkdir('/tmp/cats-v-dogs/validation/dogs')
+    os.mkdir('/tmp/cats-v-dogs/test/cats')
+    os.mkdir('/tmp/cats-v-dogs/test/dogs')
+except OSError:
+    print('Error failed to make directory')
+
+CAT_DIR = '/kaggle/input/microsoft-catsvsdogs-dataset/PetImages/Cat'
+DOG_DIR = '/kaggle/input/microsoft-catsvsdogs-dataset/PetImages/Dog'
+
+TRAINING_DIR = "/tmp/cats-v-dogs/training/"
+VALIDATION_DIR = "/tmp/cats-v-dogs/validation/"
+
+TRAINING_CATS = os.path.join(TRAINING_DIR, "cats/")
+VALIDATION_CATS = os.path.join(VALIDATION_DIR, "cats/")
+
+TRAINING_DOGS = os.path.join(TRAINING_DIR, "dogs/")
+VALIDATION_DOGS = os.path.join(VALIDATION_DIR, "dogs/")
+
+# Define whether to include test split or not
+INCLUDE_TEST = True
+
+print(len(os.listdir('/tmp/cats-v-dogs/training/cats')))
+print(len(os.listdir('/tmp/cats-v-dogs/training/dogs')))
+
+print(len(os.listdir('/tmp/cats-v-dogs/validation/cats')))
+print(len(os.listdir('/tmp/cats-v-dogs/validation/dogs')))
+
+print(len(os.listdir('/tmp/cats-v-dogs/test/cats')))
+print(len(os.listdir('/tmp/cats-v-dogs/test/dogs')))
+
+def split_data(main_dir, training_dir, validation_dir, test_dir=None, include_test_split = True,  split_size=0.9):
+    """
+    Splits the data into train validation and test sets (optional)
+
+    Args:
+    main_dir (string):  path containing the images
+    training_dir (string):  path to be used for training
+    validation_dir (string):  path to be used for validation
+    test_dir (string):  path to be used for test
+    include_test_split (boolen):  whether to include a test split or not
+    split_size (float): size of the dataset to be used for training
+    """
+    files = []
+    for file in os.listdir(main_dir):
+        if  os.path.getsize(os.path.join(main_dir, file)): # check if the file's size isn't 0
+            files.append(file) # appends file name to a list
+
+    shuffled_files = random.sample(files,  len(files)) # shuffles the data
+    split = int(0.9 * len(shuffled_files)) #the training split casted into int for numeric rounding
+    train = shuffled_files[:split] #training split
+    split_valid_test = int(split + (len(shuffled_files)-split)/2)
+   
+    if include_test_split:
+        validation = shuffled_files[split:split_valid_test] # validation split
+        test = shuffled_files[split_valid_test:]
+    else:
+        validation = shuffled_files[split:]
+
+    for element in train:
+        copyfile(os.path.join(main_dir,  element), os.path.join(training_dir, element)) # copy files into training directory
+
+    for element in validation:
+        copyfile(os.path.join(main_dir,  element), os.path.join(validation_dir, element))# copy files into validation directory
+        
+    if include_test_split:
+        for element in test:
+            copyfile(os.path.join(main_dir,  element), os.path.join(test_dir, element)) # copy files into test directory
+    print("Split sucessful!")
+
+split_data(CAT_DIR, '/tmp/cats-v-dogs/training/cats', '/tmp/cats-v-dogs/validation/cats', '/tmp/cats-v-dogs/test/cats',INCLUDE_TEST, 0.9)
+split_data(DOG_DIR, '/tmp/cats-v-dogs/training/dogs', '/tmp/cats-v-dogs/validation/dogs','/tmp/cats-v-dogs/test/dogs',INCLUDE_TEST, 0.9)
+
+print(len(os.listdir('/tmp/cats-v-dogs/training/cats')))
+print(len(os.listdir('/tmp/cats-v-dogs/training/dogs')))
+
+print(len(os.listdir('/tmp/cats-v-dogs/validation/cats')))
+print(len(os.listdir('/tmp/cats-v-dogs/validation/dogs')))
+
+
+print(len(os.listdir('/tmp/cats-v-dogs/test/cats')))
+print(len(os.listdir('/tmp/cats-v-dogs/test/dogs')))
+
+train_gen = ImageDataGenerator(
+        rescale=1./255)
+
+
+validation_gen =  ImageDataGenerator(
+        rescale=1./255.)
+
+if INCLUDE_TEST:
+    test_gen =  ImageDataGenerator(
+            rescale=1./255.)
+
+train_generator = train_gen.flow_from_directory(
+        '/tmp/cats-v-dogs/training',
+        target_size=(150, 150),
+        batch_size=64,
+        class_mode='binary')
+validation_generator = validation_gen.flow_from_directory(
+        '/tmp/cats-v-dogs/validation',
+        target_size=(150, 150),
+        batch_size=64,
+        class_mode='binary')
+
+if INCLUDE_TEST:
+    test_generator = test_gen.flow_from_directory(
+        '/tmp/cats-v-dogs/validation',
+        target_size=(150, 150),
+        batch_size=64,
+        class_mode='binary')
+
+
+class_names = ['Cat', 'Dog']
+def plot_data(generator, n_images):
+    """
+    Plots random data from dataset
+    Args:
+    generator: a generator instance
+    n_images : number of images to plot
+    """
+    i = 1
+    images, labels = generator.next()
+    labels = labels.astype('int32')
+
+    plt.figure(figsize=(14, 15))
+    
+    for image, label in zip(images, labels):
+        plt.subplot(4, 3, i)
+        plt.imshow(image)
+        plt.title(class_names[label])
+        plt.axis('off')
+        i += 1
+        if i == n_images:
+            break
+    
+    plt.show()
+plot_data(train_generator,7)
+
+plot_data(validation_generator,7)
